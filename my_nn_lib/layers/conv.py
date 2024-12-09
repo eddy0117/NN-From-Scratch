@@ -38,7 +38,8 @@ class Conv2d(BaseModule):
     
     def forward(self, x): 
         self.in_feat = x
-        I = self.convolution(x, self.w, self.b)
+        I = self.convolution(x, self.w, self.b, stride=self.stride)
+        print(I.shape)
         return I
     
     def backward(self, delta):
@@ -71,18 +72,28 @@ class Conv2d(BaseModule):
         # do dilation and padding
         dilated_delta = self.dilate(delta, dilated_stride, dilated_padding)
 
-        dLdZ = self.convolution(dilated_delta, filter)
+        # 每個 out_c 是將 in_c 個 filters conv 後的結果相加
+        # 所以 backward 時梯度要複製成 in_c 個
+        dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
+
+        dLdZ = self.convolution(dilated_delta, filter, stride=1)
 
         return dLdZ
 
     def cal_dLdW(self, x, delta):
         # delta: (N, out_c, out_h, out_w)
         # x: (N, C, H, W)
+        norm_factor = 1 / x.shape[0]
         diliated_stride = self.stride
+
         dilated_delta = self.dilate(delta, diliated_stride, 0)
-        dLdW = self.convolution(x, dilated_delta)
+        # dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
+        dilated_delta = dilated_delta.transpose(1, 0, 2, 3)
+
+        dLdW = self.convolution(x, dilated_delta, stride=1, is_dLdW=True)
+        dLdW = norm_factor * dLdW.transpose(1, 0, 2, 3)
         # dLdW -> (out_c, in_c, kh, kw)
-        dLdb = np.sum(delta, axis=(1, 2, 3))
+        dLdb = norm_factor * np.sum(delta, axis=(0, 2, 3)).reshape(-1, 1)
         # dLdb -> (out_c, 1)
         return dLdW, dLdb
 
@@ -117,33 +128,40 @@ class Conv2d(BaseModule):
 
         return np.array(im2col_feat).reshape(N * out_h * out_w, -1)
 
-    def convolution(self, input_feat: np.ndarray, filter: np.ndarray, bias=None):
+    def convolution(self, input_feat: np.ndarray, filter: np.ndarray, bias=None, stride=1, is_dLdW=False):
         '''
         input_feat: (N, C, H, W)
         filter: (out_c, C*kh*kw)
         bias: (out_C, 1)
         '''
         N, C, H, W = input_feat.shape
-        kh, kw = self.kernel_size
-        out_h = int((H - kh + 2 * self.padding) // self.stride) + 1
-        out_w = int((W - kw + 2 * self.padding) // self.stride) + 1
-        out_c = self.out_channels
+    
+
+        kh, kw = filter.shape[2:]
+        out_h = int((H - kh + 2 * self.padding) // stride) + 1
+        out_w = int((W - kw + 2 * self.padding) // stride) + 1
+        out_c = filter.shape[0]
         
         if self.padding:
             input_feat = np.pad(input_feat, ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), 'constant', constant_values=0)
 
-        im2col_feat = self.im2col(input_feat, N, kh, kw, out_h, out_w, self.stride)
-        # im2col -> (N*out_h*out_w, C*kh*kw)
+        im2col_feat = self.im2col(input_feat, N, kh, kw, out_h, out_w, stride)
+        if is_dLdW:
+            im2col_feat = im2col_feat.T
+
+        # im2col -> (N*out_h*out_w, in_c*kh*kw)
 
         # self.w = self.w.reshape(out_c, -1)
-        # filter -> (out_c, C*kh*kw)
+        # filter -> (out_c, in_c*kh*kw)
 
         # x @ w
-        # x-> (N*out_h*out_w, C*kh*kw)
-        # w -> (C*kh*kw, out_c)
+        # x-> (N*out_h*out_w, in_c*kh*kw)
+        # w -> (in_c*kh*kw, out_c)
         # print(out_h, out_w)
         # print(im2col_feat.shape, filter.shape)
-        filter = filter.reshape(-1, out_c)
+
+        # filter: (out_c, in_c, kh, kw) -transpose-> (in_c, kh, kw, out_c) -reshape-> (in_c*kh*kw, out_c)
+        filter = filter.transpose(1, 2, 3, 0).reshape(-1, out_c)
         if isinstance(bias, np.ndarray):
             out_feat = (im2col_feat @ filter + bias).T
         else:
@@ -153,6 +171,9 @@ class Conv2d(BaseModule):
         # 將 w 重新 reshape 成 (out_c, in_c, kh, kw)
         # self.w = self.w.reshape(out_c, C, kh, kw)
 
+        if is_dLdW:
+            N = self.in_channels
+        
         # 直接將 (out_c, N*out_h*out_w) reshape 成 (N, out_c, out_h, out_w) 會產生順序錯亂
         # 所以先將 (out_c, N*out_h*out_w) 拆成 (out_c, N, out_h, out_w) 後再 permute
         # out_feat -> (N, out_c, out_h, out_w)

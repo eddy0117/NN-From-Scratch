@@ -2,6 +2,10 @@ import numpy as np
 from my_mlp import MLP, CrossEntropyLoss
 from my_nn_lib import ReLU, Softmax, LeckyReLU, Linear, BaseModule, Conv2d, Flatten
 
+# import mnist
+
+
+
 class MyModel(MLP):
     def __init__(self, layer_list):
         self.layers = layer_list
@@ -81,14 +85,16 @@ class MyModel(MLP):
 
 if __name__ == "__main__":
     # making some dummy data about 3 images with 3 channels and labels
-    images = np.random.randint(0, 255, size=(4, 3, 5, 5)).astype(np.float32)
+    images = np.random.randint(0, 255, size=(4, 3, 7, 7)).astype(np.float32) / 255
     labels = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]])
 
-    model = MyModel([Conv2d(3, 3, (3, 3), 2, 0), 
-                 LeckyReLU(),
-                 Flatten(),
-                 Linear(2*2*3, 3),
-                 Softmax()])
+    model = MyModel([Conv2d(3, 1, (3, 3), 2, 0), 
+                    LeckyReLU(),
+                    # Conv2d(4, 3, (3, 3), 1, 0),
+                    # LeckyReLU(),
+                    Flatten(),
+                    Linear(1*3*3, 3),
+                    Softmax()])
 
     hyper_params = {    
         'lr': 0.01,
@@ -97,3 +103,4 @@ if __name__ == "__main__":
         'alpha': 0.9
     }
     model.train(images, labels, images, labels, CrossEntropyLoss, hyper_params, show_plot=True)
+    
