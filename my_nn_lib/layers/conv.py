@@ -88,10 +88,10 @@ class Conv2d(BaseModule):
 
         dilated_delta = self.dilate(delta, diliated_stride, 0)
         # dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
-        dilated_delta = dilated_delta.transpose(1, 0, 2, 3)
+        # dilated_delta = dilated_delta.transpose(1, 0, 2, 3)
 
         dLdW = self.convolution(x, dilated_delta, stride=1, is_dLdW=True)
-        dLdW = norm_factor * dLdW.transpose(1, 0, 2, 3)
+        # dLdW = norm_factor * dLdW.transpose(1, 0, 2, 3)
         # dLdW -> (out_c, in_c, kh, kw)
         dLdb = norm_factor * np.sum(delta, axis=(0, 2, 3)).reshape(-1, 1)
         # dLdb -> (out_c, 1)
@@ -146,8 +146,8 @@ class Conv2d(BaseModule):
             input_feat = np.pad(input_feat, ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), 'constant', constant_values=0)
 
         im2col_feat = self.im2col(input_feat, N, kh, kw, out_h, out_w, stride)
-        if is_dLdW:
-            im2col_feat = im2col_feat.T
+        # if is_dLdW:
+        #     im2col_feat = im2col_feat.T
 
         # im2col -> (N*out_h*out_w, in_c*kh*kw)
 
