@@ -1,6 +1,8 @@
 import os
+import logging
 import cv2
 import numpy as np
+from tqdm import tqdm
 from my_mlp import MLP, CrossEntropyLoss
 from my_nn_lib import ReLU, Softmax, LeckyReLU, Linear, BaseModule, Conv2d, Flatten
 
@@ -58,22 +60,22 @@ class MyModel(MLP):
         for i in range(hyper_params['epoch']):
             loss = 0
             print("Epoch: ", i)
-            for idx, (X_batch, Y_batch) in enumerate(zip(X_batch_all, Y_batch_all)):
-                print("Batch: ", idx)
-                # 單個 batch 訓練過程
-                # 1. 前向傳播
-                # 2. 反向傳播
-                # 3. 更新權重   
-                self.forward(X_batch)
-                self.backward(X_batch, Y_batch)
-                self.update_params({'lr': hyper_params['lr'], 'alpha': hyper_params['alpha']})
-                loss += loss_func.cal_loss(self.get_pred(X_batch, with_onehot=True), Y_batch)
-              
-            # print("Epoch: ", i)
-            # print('Loss:', round(loss, 2))
+            with tqdm(total=len(X_batch_all)) as pbar:
+                for idx, (X_batch, Y_batch) in enumerate(zip(X_batch_all, Y_batch_all)):
+                    # 單個 batch 訓練過程
+                    # 1. 前向傳播
+                    # 2. 反向傳播
+                    # 3. 更新權重   
+                    self.forward(X_batch)
+                    self.backward(X_batch, Y_batch)
+                    self.update_params({'lr': hyper_params['lr'], 'alpha': hyper_params['alpha']})
+                    loss += loss_func.cal_loss(self.get_pred(X_batch, with_onehot=True), Y_batch)
+                    pbar.update(1)
+            print("Epoch: ", i)
+            print('Loss:', round(loss, 2) / hyper_params['batch_size'])
 
             predictions = self.get_pred(X_val)
-            # print('Val Acc:', round(get_accuracy(predictions, Y_val), 2))
+            print('Val Acc:', round(self.calculate_acc(predictions, Y_val), 2))
             
             train_loss_arr.append(loss / n_samples)
 
@@ -90,7 +92,7 @@ class MyModel(MLP):
 if __name__ == "__main__":
 
     path = 'data/MNIST'
-
+    logging.basicConfig(level=logging.WARN)
     class_paths = os.listdir(path)
 
     x_all = []
@@ -143,7 +145,7 @@ if __name__ == "__main__":
     hyper_params = {    
         'lr': 0.01,
         'epoch': 2,
-        'batch_size': 4096,
+        'batch_size': 1024,
         'alpha': 0.9
     }
     model.train(x_train, y_train, x_val, y_val, CrossEntropyLoss, hyper_params, show_plot=True)
