@@ -39,16 +39,17 @@ class Conv2d(BaseModule):
     def forward(self, x): 
         self.in_feat = x
         I = self.convolution(x, self.w, self.b, stride=self.stride)
-        print(I.shape)
+        # print(I.shape)
         return I
     
     def backward(self, delta):
-        #  back_prop_params: {'delta_next': delta_next, 
-        #                     'w_next': w_next, 
-        #                     'prev_Y': prev_Y,}
+        # delta : (N, out_c, out_h, out_w)
         
         #  如果 next layer 是 flatten
         #  dLdZ -> (N, out_c*out_h*out_w)
+
+        # delta = np.mean(delta, axis=0, keepdims=True)
+
         dLdZ = self.cal_dLdZ(delta, self.w)
         dW, db = self.cal_dLdW(self.in_feat, delta)
         self.params_delta['dW'] = dW
@@ -59,8 +60,8 @@ class Conv2d(BaseModule):
         return dLdZ
     
     def cal_dLdZ(self, delta, filter):
-        # delta: (N, out_c, out_h, out_w)
-        # filter: (out_c, in_c, kh, kw)
+        # delta: (N, convd_c, convd_h, convd_w)
+        # filter: (convd_c, ori_c, kh, kw)
 
         # assume kh = kw
         dilated_padding = self.kernel_size[0] - 1
@@ -72,28 +73,33 @@ class Conv2d(BaseModule):
         # do dilation and padding
         dilated_delta = self.dilate(delta, dilated_stride, dilated_padding)
 
-        # 每個 out_c 是將 in_c 個 filters conv 後的結果相加
-        # 所以 backward 時梯度要複製成 in_c 個
+        
         dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
+        # dilated_delta -> (N, ori_c*convd_c, convd_h, convd_w)
 
-        dLdZ = self.convolution(dilated_delta, filter, stride=1)
+        dLdZ = self.t_convolution(dilated_delta, filter, stride=1, mode="dLdZ")
 
         return dLdZ
 
     def cal_dLdW(self, x, delta):
-        # delta: (N, out_c, out_h, out_w)
-        # x: (N, C, H, W)
+        # delta: (N, convd_c, convd_h, convd_w)
+        # x: (N, ori_c, H, W)
         norm_factor = 1 / x.shape[0]
         diliated_stride = self.stride
 
-        dilated_delta = self.dilate(delta, diliated_stride, 0)
-        # dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
-        # dilated_delta = dilated_delta.transpose(1, 0, 2, 3)
 
-        dLdW = self.convolution(x, dilated_delta, stride=1, is_dLdW=True)
-        # dLdW = norm_factor * dLdW.transpose(1, 0, 2, 3)
+
+        dilated_delta = self.dilate(delta, diliated_stride, 0)
+        dilated_delta = dilated_delta.transpose(1, 0, 2, 3)
+        # dilated_delta -> (convd_c, N, dconvd_h, dconvd_w)
+
+        dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
+        # dilated_delta -> (convd_c, ori_c*N, dconvd_h, dconvd_w)
+
+        dLdW = norm_factor * self.t_convolution(x, dilated_delta, stride=1, mode="dLdW")
         # dLdW -> (out_c, in_c, kh, kw)
-        dLdb = norm_factor * np.sum(delta, axis=(0, 2, 3)).reshape(-1, 1)
+
+        dLdb = norm_factor * np.sum(delta, axis=(0, 2, 3))
         # dLdb -> (out_c, 1)
         return dLdW, dLdb
 
@@ -123,12 +129,13 @@ class Conv2d(BaseModule):
             for ih in range(out_h):
                 for iw in range(out_w):
                     im2col_feat.append(input_feat[n, :, stride * ih:stride * ih + kh, stride * iw:stride * iw + kw])
-                    # each element -> (C, kh, kw)
-        # input_feat -> (N*out_h*out_w, C, kh, kw)
-
+                    # each element -> (in_c, kh, kw)
+        # input_feat -> (N*out_h*out_w, in_c, kh, kw)
+ 
+        # im2col_feat -> (N*out_h*out_w, in_c*kh*kw) -> (N*out_h*out_w, in_c*kh*kw)
         return np.array(im2col_feat).reshape(N * out_h * out_w, -1)
-
-    def convolution(self, input_feat: np.ndarray, filter: np.ndarray, bias=None, stride=1, is_dLdW=False):
+            
+    def convolution(self, input_feat: np.ndarray, filter: np.ndarray, bias=None, stride=1, mode="standard"):
         '''
         input_feat: (N, C, H, W)
         filter: (out_c, C*kh*kw)
@@ -161,21 +168,92 @@ class Conv2d(BaseModule):
         # print(im2col_feat.shape, filter.shape)
 
         # filter: (out_c, in_c, kh, kw) -transpose-> (in_c, kh, kw, out_c) -reshape-> (in_c*kh*kw, out_c)
-        filter = filter.transpose(1, 2, 3, 0).reshape(-1, out_c)
+  
+        filter_trans = filter.transpose(1, 2, 3, 0).reshape(-1, out_c)
         if isinstance(bias, np.ndarray):
-            out_feat = (im2col_feat @ filter + bias).T
+            out_feat = (im2col_feat @ filter_trans  + bias).T
         else:
-            out_feat = (im2col_feat @ filter).T
+            out_feat = (im2col_feat @ filter_trans).T
         # out_feat -> (out_c, N*out_h*out_w)
-        
+    
+    
+    
         # 將 w 重新 reshape 成 (out_c, in_c, kh, kw)
         # self.w = self.w.reshape(out_c, C, kh, kw)
 
-        if is_dLdW:
-            N = self.in_channels
-        
         # 直接將 (out_c, N*out_h*out_w) reshape 成 (N, out_c, out_h, out_w) 會產生順序錯亂
         # 所以先將 (out_c, N*out_h*out_w) 拆成 (out_c, N, out_h, out_w) 後再 permute
         # out_feat -> (N, out_c, out_h, out_w)
         return out_feat.reshape(out_c, N, out_h, out_w).transpose(1, 0, 2, 3)
-        # return out_feat.T.reshape(N, out_h, out_w, out_c).transpose(0, 3, 1, 2)
+  
+    def t_im2col(self, input_feat: np.ndarray, N, kh, kw, out_h, out_w, stride, mode=None):
+        im2col_feat = []
+        for n in range(N):
+            for ih in range(out_h):
+                for iw in range(out_w):
+                    im2col_feat.append(input_feat[n, :, stride * ih:stride * ih + kh, stride * iw:stride * iw + kw])
+                    # each element -> (in_c, kh, kw)
+        if mode == "dLdW":
+            # im2col_feat  : (N*kh*kw, ori_c, dconvd_h, dconvd_w) 
+            #             -> (ori_c, N*kh*kw, dconvd_h, dconvd_w) 
+            #             -> (ori_c, kh*kw , N*dconvd_h*dconvd_w)
+            return np.array(im2col_feat).transpose(1, 0, 2, 3).reshape(-1, out_h * out_w, N * kh * kw)
+        elif mode == "dLdZ":
+            # convd_c means the output channel of forward prop phase
+            # im2col_feat  : (N*ori_h*ori_w, convd_c*ori_c, kh, kw) 
+            #             -> (N*ori_h*ori_w, convd_c, ori_c, kh, kw) 
+            #             -> (convd_c, ori_c, N*ori_h*ori_w, kh, kw)
+            #             -> (convd_c, ori_c, N*ori_h*ori_w, kh*kw)
+            ori_c = self.in_channels
+            return np.array(im2col_feat).reshape(N * out_h * out_w, -1, ori_c, kh, kw)\
+                                        .transpose(1, 2, 0, 3, 4)\
+                                        .reshape(-1, ori_c, N * out_h * out_w, kh * kw)
+        else:
+            raise NotImplementedError   
+
+    def t_convolution(self, input_feat: np.ndarray, filter: np.ndarray, stride=1, mode=None):
+
+        N, C, H, W = input_feat.shape
+    
+
+        kh, kw = filter.shape[2:]
+        ori_h = int((H - kh + 2 * self.padding) // stride) + 1
+        ori_w = int((W - kw + 2 * self.padding) // stride) + 1
+        convd_c = filter.shape[0]
+        
+        if self.padding:
+            input_feat = np.pad(input_feat, ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)), 'constant', constant_values=0)
+
+        im2col_feat = self.t_im2col(input_feat, N, kh, kw, ori_h, ori_w, stride, mode)
+    
+
+        # filter: (out_c, in_c, kh, kw) -transpose-> (in_c, kh, kw, out_c) -reshape-> (in_c*kh*kw, out_c)
+       
+        if mode == "dLdW":
+            # im2col_feat: (ori_c, kh*kw , N*dconvd_h*dconvd_w)
+            # filter : (convd_c, ori_c*N, dconvd_h, dconvd_w)
+            #       -> (convd_c, ori_c, N*dconvd_h*dconvd_w) 
+            #       -> (ori_c, N*dconvd_h*dconvd_w, convd_c)
+            filter_trans = filter.reshape(convd_c, -1, N * kh * kw).transpose(1, 2, 0)
+            out_feat = (im2col_feat @ filter_trans)
+            # out_feat : (ori_c, kh*kw, convd_c)
+            #         -> (ori_c, kh, kw, convd_c)
+            #         -> (convd_c, ori_c, kh, kw)
+            return out_feat.reshape(-1, ori_h, ori_w, convd_c).transpose(3, 0, 1, 2)
+        elif mode == "dLdZ":
+            # im2col_feat: (convd_c, ori_c, N*ori_h*ori_w, kh*kw)
+            # filter : (convd_c, ori_c, kh, kw) 
+            #       -> (convd_c, ori_c, kh*kw, 1) 
+
+            filter_trans = filter.reshape(convd_c, -1, kh * kw, 1)
+            out_feat = (im2col_feat @ filter_trans)
+            # out_feat : (convd_c, ori_c, N*ori_h*ori_w, 1)
+            #         -> (convd_c, ori_c, N, ori_h, ori_w)
+            #         -> (convd_c, N, ori_c, ori_h, ori_w)
+            # sum0dim -> (N, ori_c, ori_h, ori_w)
+
+            return out_feat.reshape(convd_c, -1, N, ori_h, ori_w)\
+                           .transpose(0, 2, 1, 3, 4)\
+                           .sum(axis=0)
+        else:
+            raise NotImplementedError

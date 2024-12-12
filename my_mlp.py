@@ -131,7 +131,7 @@ class MLP:
         n_dim = len(X.shape)
         if X.shape[0] % bs != 0:  
             X = np.pad(X, [[0, bs - (n_samples % bs)] if i == 0 else [0, 0] for i in range(n_dim)], 'constant', constant_values=(0))
-            Y = np.pad(Y, [[0, bs - (n_samples % bs)] if i == 0 else [0, 0] for i in range(n_dim)], 'constant', constant_values=(0))
+            Y = np.pad(Y, [[0, bs - (n_samples % bs)], [0, 0]], 'constant', constant_values=(0))
 
         if n_dim == 2:
             X_batch_all = X.reshape(-1, bs, X.shape[1])

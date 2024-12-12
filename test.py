@@ -1,3 +1,5 @@
+import os
+import cv2
 import numpy as np
 from my_mlp import MLP, CrossEntropyLoss
 from my_nn_lib import ReLU, Softmax, LeckyReLU, Linear, BaseModule, Conv2d, Flatten
@@ -55,7 +57,9 @@ class MyModel(MLP):
 
         for i in range(hyper_params['epoch']):
             loss = 0
-            for X_batch, Y_batch in zip(X_batch_all, Y_batch_all):
+            print("Epoch: ", i)
+            for idx, (X_batch, Y_batch) in enumerate(zip(X_batch_all, Y_batch_all)):
+                print("Batch: ", idx)
                 # 單個 batch 訓練過程
                 # 1. 前向傳播
                 # 2. 反向傳播
@@ -84,23 +88,63 @@ class MyModel(MLP):
     
 
 if __name__ == "__main__":
-    # making some dummy data about 3 images with 3 channels and labels
-    images = np.random.randint(0, 255, size=(4, 3, 7, 7)).astype(np.float32) / 255
-    labels = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]])
 
-    model = MyModel([Conv2d(3, 1, (3, 3), 2, 0), 
+    path = 'data/MNIST'
+
+    class_paths = os.listdir(path)
+
+    x_all = []
+    y_all = []
+
+    for cls_path in class_paths:
+        img_paths = os.listdir(os.path.join(path, cls_path))
+        for img_path in img_paths:
+            img = cv2.imread(os.path.join(path, cls_path, img_path), cv2.IMREAD_GRAYSCALE)
+            img = cv2.resize(img, (28, 28))
+            x_all.append(img)
+            y_all.append(int(cls_path))
+    x_all = np.array(x_all)
+    y_all = np.array(y_all)
+    
+    x_all = x_all.reshape(-1, 1, 28, 28) / 255
+
+    # one-hot encoding
+    y_one_hot = np.zeros((len(y_all), 10))
+    y_one_hot[np.arange(len(y_all)), y_all] = 1
+
+    # shuffle data
+    idx = np.arange(len(x_all))
+    np.random.shuffle(idx)
+    x_all = x_all[idx]
+    y_one_hot = y_one_hot[idx]
+
+    
+
+    # split train and val
+    split_ratio = 0.8
+    split_idx = int(len(x_all) * split_ratio)
+    x_train = x_all[:split_idx]
+    y_train = y_one_hot[:split_idx]
+    x_val = x_all[split_idx:]
+    y_val = y_one_hot[split_idx:]
+
+    # making some dummy data about 3 images with 3 channels and labels
+    # images = np.random.randint(0, 255, size=(4, 3, 28, 28)).astype(np.float32) / 255
+    # labels = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0], [0, 1, 0]])
+
+    model = MyModel([Conv2d(1, 4, (3, 3), 1, 0), 
                     LeckyReLU(),
-                    # Conv2d(4, 3, (3, 3), 1, 0),
-                    # LeckyReLU(),
+                    Conv2d(4, 2, (3, 3), 1, 0),
+                    LeckyReLU(),
                     Flatten(),
-                    Linear(1*3*3, 3),
+                    Linear(2*24*24, 10),
                     Softmax()])
 
     hyper_params = {    
         'lr': 0.01,
-        'epoch': 50,
-        'batch_size': 2,
+        'epoch': 2,
+        'batch_size': 4096,
         'alpha': 0.9
     }
-    model.train(images, labels, images, labels, CrossEntropyLoss, hyper_params, show_plot=True)
+    model.train(x_train, y_train, x_val, y_val, CrossEntropyLoss, hyper_params, show_plot=True)
     
