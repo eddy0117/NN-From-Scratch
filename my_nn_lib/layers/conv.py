@@ -98,13 +98,13 @@ class Conv2d(BaseModule):
         dilated_delta = self.dilate(delta, diliated_stride, 0)
         dilated_delta = dilated_delta.transpose(1, 0, 2, 3)
         # dilated_delta -> (convd_c, N, dconvd_h, dconvd_w)
-
+        
         dilated_delta = np.tile(dilated_delta, (1, self.in_channels, 1, 1))
         # dilated_delta -> (convd_c, ori_c*N, dconvd_h, dconvd_w)
 
         dLdW = norm_factor * self.t_convolution(x, dilated_delta, stride=1, mode="dLdW")
         # dLdW -> (out_c, in_c, kh, kw)
-
+        
         dLdb = norm_factor * np.sum(delta, axis=(0, 2, 3))
         # dLdb -> (out_c, 1)
         return dLdW, dLdb
