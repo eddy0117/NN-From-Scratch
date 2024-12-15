@@ -27,10 +27,9 @@ class Conv2d(BaseModule):
         # w 是高斯分佈的隨機數，所以使用 xavier init 時分子為 2
         kh, kw = self.kernel_size
         # w = np.random.randn(self.out_channels, self.in_channels, kh, kw) * np.sqrt(2 / (self.in_channels * kh * kw))
-        w = (torch.randn(self.in_channels * kh * kw, self.out_channels) * np.sqrt(2 / (self.in_channels * kh * kw))).\
-            reshape(self.out_channels, self.in_channels, kh, kw).cuda()
+        w = (torch.randn(self.out_channels, self.in_channels, kh, kw) * np.sqrt(2 / (self.in_channels * kh * kw))).cuda()
         b = torch.zeros((1, self.out_channels)).cuda()
-  
+      
         velocity['w'] = torch.zeros_like(w).cuda()
         velocity['b'] = torch.zeros_like(b).cuda()
         return w, b, velocity
@@ -42,21 +41,18 @@ class Conv2d(BaseModule):
         self.b += self.velocity['b']
     
     def forward(self, x): 
-        self.in_feat = x
-        
-        start = time.time()
+        self.in_feat = x.contiguous()
+
         I = self.convolution(x, self.w, self.b, stride=self.stride)
-        logging.info(f"forward time: {time.time() - start}")
+    
         # print(I.shape)
         return I
     
     def backward(self, delta):
         # delta : (N, out_c, out_h, out_w)
         
-        #  如果 next layer 是 flatten
+ 
         #  dLdZ -> (N, out_c*out_h*out_w)
-
-        # delta = np.mean(delta, axis=0, keepdims=True)
 
         dLdZ = self.cal_dLdZ(delta, self.w)
         dW, db = self.cal_dLdW(self.in_feat, delta)
@@ -98,17 +94,17 @@ class Conv2d(BaseModule):
 
 
         dilated_delta = self.dilate(delta, diliated_stride, 0)
-        dilated_delta = dilated_delta.permute(1, 0, 2, 3)
+        dilated_delta = dilated_delta.permute(1, 0, 2, 3).contiguous()
         # dilated_delta -> (convd_c, N, dconvd_h, dconvd_w)
         
         dilated_delta = torch.tile(dilated_delta, (1, self.in_channels, 1, 1))
         # dilated_delta -> (convd_c, ori_c*N, dconvd_h, dconvd_w)
 
         dLdW = norm_factor * self.t_convolution(x, dilated_delta, stride=1, mode="dLdW")
-        # dLdW -> (out_c, in_c, kh, kw)
+        # dLdW -> (convd_c, ori_c, kh, kw)
         
         dLdb = norm_factor * torch.sum(delta, axis=(0, 2, 3))
-        # dLdb -> (out_c, 1)
+        # dLdb -> (convd_c, 1)
         return dLdW, dLdb
 
     def dilate(self, x, stride, padding=None):
@@ -132,34 +128,31 @@ class Conv2d(BaseModule):
         return F.pad(x, (padding, padding, padding, padding), mode='constant', value=0)
     
     def im2col(self, input_feat, N, kh, kw, out_h, out_w, stride):
+        # input_feat: (N, in_c, H, W)
+
         
-      
-        # 當前實作使用循環，效率較低
-        # 改進方案：使用 numpy 的向量化操作
-        input_feat = input_feat.permute(0, 2, 3, 1)  # (N, H, W, C)
-        
-        # 創建滑動視窗的索引
-        i0 = torch.arange(kh).repeat(kw)
-        i1 = torch.arange(out_h).repeat_interleave(out_w) * stride
-        i2 = torch.arange(kw).repeat(kh)
-        i3 = torch.arange(out_w).repeat_interleave(out_h) * stride
+        input_feat = input_feat.permute(0, 2, 3, 1).contiguous() 
+        # input_feat: (N, H, W, in_c)
+
+    
+        i0 = np.repeat(np.arange(kh), kw)
+        i1 = np.repeat(np.arange(out_h) * stride, out_w)
+        i2 = np.tile(np.arange(kw), kh)
+        i3 = np.tile(np.arange(out_w) * stride, out_h)
         
         # 使用高級索引一次性獲取所有窗口
         col = input_feat[:, i0[None, :] + i1[:, None],
                         i2[None, :] + i3[:, None], :]
-        
-        # 重塑為所需形狀
+        # col: (N, kh*kw, out_h*out_w, in_c) 
+       
         col = col.reshape(N * out_h * out_w, -1)
+        # col: (N*out_h*out_w, in_c*kh*kw)
 
         return col
         
             
     def convolution(self, input_feat, filter, bias=None, stride=1, mode="standard"):
-        '''
-        input_feat: (N, C, H, W)
-        filter: (out_c, C*kh*kw)
-        bias: (out_C, 1)
-        '''
+
         N, C, H, W = input_feat.shape
     
 
@@ -173,9 +166,7 @@ class Conv2d(BaseModule):
         start = time.time()
         im2col_feat = self.im2col(input_feat, N, kh, kw, out_h, out_w, stride)
         logging.info(f"im2col time: {time.time() - start}")
-        # if is_dLdW:
-        #     im2col_feat = im2col_feat.T
-
+      
         # im2col -> (N*out_h*out_w, in_c*kh*kw)
 
         # self.w = self.w.reshape(out_c, -1)
@@ -188,9 +179,9 @@ class Conv2d(BaseModule):
         # print(im2col_feat.shape, filter.shape)
 
         # filter: (out_c, in_c, kh, kw) -transpose-> (in_c, kh, kw, out_c) -reshape-> (in_c*kh*kw, out_c)
-        start = time.time()
-        filter_trans = filter.permute(1, 2, 3, 0).reshape(-1, out_c)
-        if isinstance(bias, np.ndarray):
+        
+        filter_trans = filter.permute(1, 2, 3, 0).contiguous().reshape(-1, out_c)
+        if isinstance(bias, torch.Tensor):
             
             out_feat = (im2col_feat @ filter_trans  + bias).T
             
@@ -206,18 +197,20 @@ class Conv2d(BaseModule):
         # 直接將 (out_c, N*out_h*out_w) reshape 成 (N, out_c, out_h, out_w) 會產生順序錯亂
         # 所以先將 (out_c, N*out_h*out_w) 拆成 (out_c, N, out_h, out_w) 後再 permute
         # out_feat -> (N, out_c, out_h, out_w)
-        out_feat = out_feat.reshape(out_c, N, out_h, out_w).permute(1, 0, 2, 3)
-        logging.info(f"conv time: {time.time() - start}")
+        out_feat = out_feat.reshape(out_c, N, out_h, out_w).permute(1, 0, 2, 3).contiguous()
+
         return out_feat
   
     def t_im2col(self, input_feat, N, kh, kw, out_h, out_w, stride, mode=None):
-        input_feat = input_feat.permute(0, 2, 3, 1)  # (N, H, W, C)
+        # input_feat : (N, ori_c, ori_h, ori_w)
+
+        input_feat = input_feat.permute(0, 2, 3, 1).contiguous()  # (N, H, W, C)
         
         # 創建滑動視窗的索引
-        i0 = torch.arange(kh).repeat(kw)
-        i1 = torch.arange(out_h).repeat_interleave(out_w) * stride
-        i2 = torch.arange(kw).repeat(kh)
-        i3 = torch.arange(out_w).repeat_interleave(out_h) * stride
+        i0 = np.repeat(np.arange(kh), kw)
+        i1 = np.repeat(np.arange(out_h) * stride, out_w)
+        i2 = np.tile(np.arange(kw), kh)
+        i3 = np.tile(np.arange(out_w) * stride, out_h)
         
         # 使用高級索引一次性獲取所有窗口
         im2col_feat = input_feat[:, i0[None, :] + i1[:, None],
@@ -226,7 +219,7 @@ class Conv2d(BaseModule):
             # im2col_feat  : (N*kh*kw, ori_c, dconvd_h, dconvd_w) 
             #             -> (ori_c, N*kh*kw, dconvd_h, dconvd_w) 
             #             -> (ori_c, kh*kw , N*dconvd_h*dconvd_w)
-            return im2col_feat.permute(1, 0, 2, 3).reshape(-1, out_h * out_w, N * kh * kw)
+            return im2col_feat.permute(1, 0, 2, 3).contiguous().reshape(-1, out_h * out_w, N * kh * kw)
         elif mode == "dLdZ":
             # convd_c means the output channel of forward prop phase
             # im2col_feat  : (N*ori_h*ori_w, convd_c*ori_c, kh, kw) 
@@ -235,7 +228,7 @@ class Conv2d(BaseModule):
             #             -> (convd_c, ori_c, N*ori_h*ori_w, kh*kw)
             ori_c = self.in_channels
             return im2col_feat.reshape(N * out_h * out_w, -1, ori_c, kh, kw)\
-                                        .permute(1, 2, 0, 3, 4)\
+                                        .permute(1, 2, 0, 3, 4).contiguous()\
                                         .reshape(-1, ori_c, N * out_h * out_w, kh * kw)
         else:
             raise NotImplementedError   
@@ -252,23 +245,23 @@ class Conv2d(BaseModule):
         
         if self.padding:
             input_feat = self.zero_padding(input_feat, self.padding)
-        start = time.time()
+  
         im2col_feat = self.t_im2col(input_feat, N, kh, kw, ori_h, ori_w, stride, mode)
-        logging.info(f"t_im2col time:{time.time() - start} ")
+
 
         # filter: (out_c, in_c, kh, kw) -transpose-> (in_c, kh, kw, out_c) -reshape-> (in_c*kh*kw, out_c)
-        start = time.time()
+        
         if mode == "dLdW":
             # im2col_feat: (ori_c, kh*kw , N*dconvd_h*dconvd_w)
             # filter : (convd_c, ori_c*N, dconvd_h, dconvd_w)
             #       -> (convd_c, ori_c, N*dconvd_h*dconvd_w) 
             #       -> (ori_c, N*dconvd_h*dconvd_w, convd_c)
-            filter_trans = filter.reshape(convd_c, -1, N * kh * kw).permute(1, 2, 0)
+            filter_trans = filter.reshape(convd_c, -1, N * kh * kw).permute(1, 2, 0).contiguous()
             out_feat = (im2col_feat @ filter_trans)
             # out_feat : (ori_c, kh*kw, convd_c)
             #         -> (ori_c, kh, kw, convd_c)
             #         -> (convd_c, ori_c, kh, kw)
-            out_feat = out_feat.reshape(-1, ori_h, ori_w, convd_c).permute(3, 0, 1, 2)
+            out_feat = out_feat.reshape(-1, ori_h, ori_w, convd_c).permute(3, 0, 1, 2).contiguous()
         elif mode == "dLdZ":
             # im2col_feat: (convd_c, ori_c, N*ori_h*ori_w, kh*kw)
             # filter : (convd_c, ori_c, kh, kw) 
@@ -282,9 +275,9 @@ class Conv2d(BaseModule):
             # sum0dim -> (N, ori_c, ori_h, ori_w)
 
             out_feat = out_feat.reshape(convd_c, -1, N, ori_h, ori_w)\
-                           .permute(0, 2, 1, 3, 4)\
+                           .permute(0, 2, 1, 3, 4).contiguous()\
                            .sum(axis=0)
         else:
             raise NotImplementedError
-        logging.info(f"t_conv time: {time.time() - start}")
+
         return out_feat

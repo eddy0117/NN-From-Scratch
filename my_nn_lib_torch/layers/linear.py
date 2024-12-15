@@ -17,7 +17,8 @@ class Linear(BaseModule):
         # source: https://www.numpyninja.com/post/weight-initialization-techniques
 
         # w 是高斯分佈的隨機數，所以使用 xavier init 時分子為 2
-        w = (torch.randn(self.in_features, self.out_features) * np.sqrt(2 / self.in_features)).cuda()
+        std = np.sqrt(2.0 / (self.in_features + self.out_features))
+        w = (torch.randn(self.in_features, self.out_features) * std).cuda()
         b = torch.zeros((1, self.out_features)).cuda()
    
         velocity['w'] = torch.zeros_like(w).cuda()
@@ -25,6 +26,7 @@ class Linear(BaseModule):
         return w, b, velocity
     
     def update_params(self, opt_params: dict):
+
         self.velocity['w'] = opt_params['alpha'] * self.velocity['w'] - opt_params['lr'] * self.params_delta['dW']
         self.velocity['b'] = opt_params['alpha'] * self.velocity['b'] - opt_params['lr'] * self.params_delta['db']
         self.w += self.velocity['w']
@@ -46,4 +48,4 @@ class Linear(BaseModule):
         # dL/db
         self.params_delta['db'] = norm_factor * torch.sum(delta, axis=0, keepdims=True)
 
-        return dLdZ
+        return dLdZ#, torch.mean(self.params_delta['dW']).cpu().detach().numpy()
