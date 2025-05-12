@@ -6,6 +6,8 @@ class BaseModule(ABC):
         # in_feat 是forward 的 input x
         self.in_feat = None
         self.params_delta = {'dW': None, 'db': None}
+        self.w = None
+        self.b = None
     @abstractmethod
     def forward(self, x):
         pass
@@ -17,5 +19,7 @@ class BaseModule(ABC):
     def update_params(self, opt_params):
         pass
 
+    def params(self):
+        return self.w, self.b
 
 # class MyLayerModule(BaseModule):

@@ -24,7 +24,7 @@ model = MyModel([Conv2d(3, 16, (7, 7), 1, 0),
 hyper_params = {    
     'lr': 0.005,
     'epoch': 50,
-    'batch_size': 64,
+    'batch_size': 32,
     'alpha': 0.9
 }
 

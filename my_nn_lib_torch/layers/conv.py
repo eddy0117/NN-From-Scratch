@@ -140,7 +140,6 @@ class Conv2d(BaseModule):
         i2 = np.tile(np.arange(kw), kh)
         i3 = np.tile(np.arange(out_w) * stride, out_h)
         
-        # 使用高級索引一次性獲取所有窗口
         col = input_feat[:, i0[None, :] + i1[:, None],
                         i2[None, :] + i3[:, None], :]
         # col: (N, kh*kw, out_h*out_w, in_c) 
